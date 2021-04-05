@@ -43,7 +43,7 @@ export default class DefaultBrowserBehavior implements BrowserBehavior, Extended
     'samsung',
   ];
 
-  private webkitBrowsers: string[] = ['crios', 'fxios', 'safari', 'ios'];
+  private webkitBrowsers: string[] = ['crios', 'fxios', 'safari', 'ios', 'ios-webview'];
 
   private enableUnifiedPlanForChromiumBasedBrowsers: boolean;
 

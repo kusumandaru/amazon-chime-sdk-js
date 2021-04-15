@@ -761,8 +761,12 @@ export default class DefaultDeviceController
   private stopTracksAndRemoveCallback(kind: 'video' | 'audio'): void {
     const activeDevice = this.activeDevices[kind];
 
+    if (!activeDevice) {
+      return;
+    }
+
     /* istanbul ignore next */
-    const endedCallback = activeDevice?.endedCallback;
+    const endedCallback = activeDevice.endedCallback;
 
     for (const track of activeDevice.stream.getTracks()) {
       track.stop();

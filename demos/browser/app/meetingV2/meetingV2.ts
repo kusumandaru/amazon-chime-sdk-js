@@ -511,6 +511,12 @@ export class DemoMeetingApp
           }
           await this.openAudioOutputFromSelection();
           this.hideProgress('progress-authenticate');
+
+          // Open the signaling connection while the user is checking their input devices.
+          const preconnect = document.getElementById('preconnect') as HTMLInputElement;
+          if (preconnect.checked) {
+            this.audioVideo.start({ signalingOnly: true });
+          }
         }
       );
     });
@@ -1270,6 +1276,7 @@ export class DemoMeetingApp
     window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
       this.log(event.reason);
     });
+
     this.audioVideo.start();
   }
 

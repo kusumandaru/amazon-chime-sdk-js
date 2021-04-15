@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add optional header parameter to the MeetingPOSTLogger
 - Add extra logging for synthesizing an audio stream
 
+- `DefaultAudioVideoFacade.start` now takes an options argument. You can use
+  this to trigger a signaling socket connection prior to device selection: call
+  `audioVideo.start({ signalingOnly: true })`, and then later call
+  `audioVideo.start()` as usual.
+
 ### Changed
 
 - Disable audio properties on the peer connection if the join information does not include an audio host URL.

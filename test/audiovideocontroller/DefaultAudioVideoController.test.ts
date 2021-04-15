@@ -36,6 +36,7 @@ import {
   SdkTurnCredentials,
 } from '../../src/signalingprotocol/SignalingProtocol.js';
 import SimulcastLayers from '../../src/simulcastlayers/SimulcastLayers';
+import OpenSignalingConnectionTask from '../../src/task/OpenSignalingConnectionTask';
 import AllHighestVideoBandwidthPolicy from '../../src/videodownlinkbandwidthpolicy/AllHighestVideoBandwidthPolicy';
 import VideoSource from '../../src/videosource/VideoSource';
 import NScaleVideoUplinkBandwidthPolicy from '../../src/videouplinkbandwidthpolicy/NScaleVideoUplinkBandwidthPolicy';
@@ -326,6 +327,71 @@ describe('DefaultAudioVideoController', () => {
       await stop();
     });
 
+    it('can be started with a pre-start', async () => {
+      configuration.videoUplinkBandwidthPolicy = null;
+      configuration.videoDownlinkBandwidthPolicy = null;
+      audioVideoController = new DefaultAudioVideoController(
+        configuration,
+        new NoOpDebugLogger(),
+        webSocketAdapter,
+        new NoOpMediaStreamBroker(),
+        reconnectController
+      );
+      let sessionStarted = false;
+      let sessionConnecting = false;
+      class TestObserver implements AudioVideoObserver {
+        audioVideoDidStart(): void {
+          // use this opportunity to verify that start is idempotent
+          audioVideoController.start();
+          sessionStarted = true;
+        }
+        audioVideoDidStartConnecting(): void {
+          sessionConnecting = true;
+        }
+      }
+      audioVideoController.addObserver(new TestObserver());
+
+      await audioVideoController.start({ signalingOnly: true });
+
+      // Give it a moment.
+      await delay(100);
+
+      // Now proceed with the start. Everything should still work.
+      await start();
+
+      await delay(defaultDelay);
+      webSocketAdapter.send(makeJoinAckFrame());
+      await delay(defaultDelay);
+      webSocketAdapter.send(makeIndexFrame());
+      webSocketAdapter.send(makeAudioStreamIdInfoFrame());
+      webSocketAdapter.send(makeAudioMetadataFrame());
+
+      expect(sessionStarted).to.be.true;
+      expect(sessionConnecting).to.be.true;
+
+      await stop();
+    });
+
+    it('is resilient against pre-start errors', async () => {
+      audioVideoController = new DefaultAudioVideoController(
+        configuration,
+        new NoOpDebugLogger(),
+        webSocketAdapter,
+        new NoOpMediaStreamBroker(),
+        reconnectController
+      );
+
+      const fake = sinon.fake.rejects('oh no');
+      sinon.replace(OpenSignalingConnectionTask.prototype, 'run', fake);
+
+      // No worries.
+      await audioVideoController.start({ signalingOnly: true });
+
+      sinon.restore();
+
+      await stop();
+    });
+
     it('can be started with null audio host url', async () => {
       configuration.videoUplinkBandwidthPolicy = null;
       configuration.videoDownlinkBandwidthPolicy = null;
@@ -360,6 +426,7 @@ describe('DefaultAudioVideoController', () => {
 
       expect(sessionStarted).to.be.true;
       expect(sessionConnecting).to.be.true;
+
       await stop();
     });
 

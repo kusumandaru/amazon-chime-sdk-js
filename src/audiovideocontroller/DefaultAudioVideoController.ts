@@ -47,7 +47,6 @@ import LeaveAndReceiveLeaveAckTask from '../task/LeaveAndReceiveLeaveAckTask';
 import ListenForVolumeIndicatorsTask from '../task/ListenForVolumeIndicatorsTask';
 import MonitorTask from '../task/MonitorTask';
 import OpenSignalingConnectionTask from '../task/OpenSignalingConnectionTask';
-import ParallelGroupTask from '../task/ParallelGroupTask';
 import ReceiveAudioInputTask from '../task/ReceiveAudioInputTask';
 import ReceiveTURNCredentialsTask from '../task/ReceiveTURNCredentialsTask';
 import ReceiveVideoInputTask from '../task/ReceiveVideoInputTask';
@@ -57,6 +56,7 @@ import SerialGroupTask from '../task/SerialGroupTask';
 import SetLocalDescriptionTask from '../task/SetLocalDescriptionTask';
 import SetRemoteDescriptionTask from '../task/SetRemoteDescriptionTask';
 import SubscribeAndReceiveSubscribeAckTask from '../task/SubscribeAndReceiveSubscribeAckTask';
+import Task from '../task/Task';
 import TimeoutTask from '../task/TimeoutTask';
 import WaitForAttendeePresenceTask from '../task/WaitForAttendeePresenceTask';
 import DefaultTransceiverController from '../transceivercontroller/DefaultTransceiverController';
@@ -105,6 +105,7 @@ export default class DefaultAudioVideoController
   private enableSimulcast: boolean = false;
   private totalRetryCount = 0;
   private startAudioVideoTimestamp: number = 0;
+  private signalingTask: Task;
   destroyed = false;
 
   constructor(
@@ -221,14 +222,11 @@ export default class DefaultAudioVideoController
     }
   }
 
-  start(): void {
-    this.activeSpeakerDetector;
-    this.sessionStateController.perform(SessionStateControllerAction.Connect, () => {
-      this.actionConnect(false);
-    });
-  }
+  private initSignalingClient(): void {
+    if (this.meetingSessionContext.signalingClient) {
+      return;
+    }
 
-  private async actionConnect(reconnecting: boolean): Promise<void> {
     this.connectionHealthData.reset();
     this.meetingSessionContext = new AudioVideoControllerState();
     this.meetingSessionContext.logger = this.logger;
@@ -243,6 +241,37 @@ export default class DefaultAudioVideoController
       this._webSocketAdapter,
       this.logger
     );
+  }
+
+  private prestart(): void {
+    this.logger.info('Pre-connecting signaling connection.');
+    this.createOrReuseSignalingTask()
+      .run()
+      .catch(e => {
+        this.logger.error(`Signaling task pre-start failed: ${e}`);
+
+        // Clean up just in case a subsequent attempt will succeed.
+        this.signalingTask = undefined;
+      });
+  }
+
+  start(options?: { signalingOnly?: boolean }): void {
+    if (options?.signalingOnly === true) {
+      this.prestart();
+      return;
+    }
+
+    // For side-effects: lazy getter.
+    this.activeSpeakerDetector;
+
+    this.sessionStateController.perform(SessionStateControllerAction.Connect, () => {
+      this.actionConnect(false);
+    });
+  }
+
+  private async actionConnect(reconnecting: boolean): Promise<void> {
+    this.initSignalingClient();
+
     this.meetingSessionContext.mediaStreamBroker = this._mediaStreamBroker;
     this.meetingSessionContext.realtimeController = this._realtimeController;
     this.meetingSessionContext.audioMixController = this._audioMixController;
@@ -345,6 +374,7 @@ export default class DefaultAudioVideoController
         this.eventController.publishEvent('meetingStartRequested');
       }
     }
+
     this.meetingSessionContext.startAudioVideoTimestamp = this.startAudioVideoTimestamp;
     if (this._reconnectController.hasStartedConnectionAttempt()) {
       // This does not reset the reconnect deadline, but declare it's not the first connection.
@@ -359,48 +389,71 @@ export default class DefaultAudioVideoController
     const needsToWaitForAttendeePresence =
       useAudioConnection &&
       this.meetingSessionContext.meetingSessionConfiguration.attendeePresenceTimeoutMs > 0;
+
+    const context = this.meetingSessionContext;
+
+    // Syntactic sugar.
+    const timeout = (timeoutMs: number, task: Task): TimeoutTask => {
+      return new TimeoutTask(this.logger, task, timeoutMs);
+    };
+
+    // First layer.
+    const monitor = new MonitorTask(
+      context,
+      this.configuration.connectionHealthPolicyConfiguration,
+      this.connectionHealthData
+    ).once();
+
+    // Second layer.
+    const receiveAudioInput = new ReceiveAudioInputTask(context).once();
+    const signaling = new SerialGroupTask(this.logger, 'Signaling', [
+      // If pre-connecting, this will be an existing task that has already been run.
+      this.createOrReuseSignalingTask(),
+      new ListenForVolumeIndicatorsTask(context),
+      new SendAndReceiveDataMessagesTask(context),
+      new JoinAndReceiveIndexTask(context),
+      new ReceiveTURNCredentialsTask(context),
+      // TODO: ensure index handler does not race with incoming index update
+      new ReceiveVideoStreamIndexTask(context),
+    ]).once();
+
+    // Third layer.
+    const createPeerConnection = new CreatePeerConnectionTask(context).once(signaling);
+    const attachMediaInput = new AttachMediaInputTask(context).once(
+      createPeerConnection,
+      receiveAudioInput
+    );
+
+    // Wrap up. This is basically a serial group, but we can probably peel them
+    // apart a little more over time.
+    const createSDP = new CreateSDPTask(context).once(attachMediaInput);
+    const setLocalDescription = new SetLocalDescriptionTask(context).once(createSDP);
+    const iceCandidates = new FinishGatheringICECandidatesTask(context).once(setLocalDescription);
+    const subscribeAck = new SubscribeAndReceiveSubscribeAckTask(context).once(iceCandidates);
+
+    let attendeePresence: TimeoutTask | undefined;
+    if (needsToWaitForAttendeePresence) {
+      attendeePresence = timeout(
+        this.configuration.attendeePresenceTimeoutMs,
+        new WaitForAttendeePresenceTask(context).once()
+      );
+    }
+    const setRemoteDescription = new SetRemoteDescriptionTask(context).once(
+      attendeePresence,
+      iceCandidates,
+      subscribeAck
+    );
+
+    // This is mostly for logging.
+    const connect = new SerialGroupTask(this.logger, this.wrapTaskName('AudioVideoStart'), [
+      monitor,
+      timeout(this.configuration.connectionTimeoutMs, setRemoteDescription),
+    ]);
+
+    // The rest.
     try {
-      await new SerialGroupTask(this.logger, this.wrapTaskName('AudioVideoStart'), [
-        new MonitorTask(
-          this.meetingSessionContext,
-          this.configuration.connectionHealthPolicyConfiguration,
-          this.connectionHealthData
-        ),
-        new ReceiveAudioInputTask(this.meetingSessionContext),
-        new TimeoutTask(
-          this.logger,
-          new SerialGroupTask(this.logger, 'Media', [
-            new SerialGroupTask(this.logger, 'Signaling', [
-              new OpenSignalingConnectionTask(this.meetingSessionContext),
-              new ListenForVolumeIndicatorsTask(this.meetingSessionContext),
-              new SendAndReceiveDataMessagesTask(this.meetingSessionContext),
-              new JoinAndReceiveIndexTask(this.meetingSessionContext),
-              new ReceiveTURNCredentialsTask(this.meetingSessionContext),
-              // TODO: ensure index handler does not race with incoming index update
-              new ReceiveVideoStreamIndexTask(this.meetingSessionContext),
-            ]),
-            new SerialGroupTask(this.logger, 'Peer', [
-              new CreatePeerConnectionTask(this.meetingSessionContext),
-              new AttachMediaInputTask(this.meetingSessionContext),
-              new CreateSDPTask(this.meetingSessionContext),
-              new SetLocalDescriptionTask(this.meetingSessionContext),
-              new FinishGatheringICECandidatesTask(this.meetingSessionContext),
-              new SubscribeAndReceiveSubscribeAckTask(this.meetingSessionContext),
-              needsToWaitForAttendeePresence
-                ? new TimeoutTask(
-                    this.logger,
-                    new ParallelGroupTask(this.logger, 'FinalizeConnection', [
-                      new WaitForAttendeePresenceTask(this.meetingSessionContext),
-                      new SetRemoteDescriptionTask(this.meetingSessionContext),
-                    ]),
-                    this.meetingSessionContext.meetingSessionConfiguration.attendeePresenceTimeoutMs
-                  )
-                : new SetRemoteDescriptionTask(this.meetingSessionContext),
-            ]),
-          ]),
-          this.configuration.connectionTimeoutMs
-        ),
-      ]).run();
+      await connect.run();
+
       this.sessionStateController.perform(SessionStateControllerAction.FinishConnecting, () => {
         /* istanbul ignore else */
         if (this.eventController) {
@@ -419,6 +472,7 @@ export default class DefaultAudioVideoController
         this.actionFinishConnecting();
       });
     } catch (error) {
+      this.signalingTask = undefined;
       this.sessionStateController.perform(SessionStateControllerAction.Fail, async () => {
         const status = new MeetingSessionStatus(
           this.getMeetingStatusCode(error) || MeetingSessionStatusCode.TaskFailed
@@ -432,7 +486,21 @@ export default class DefaultAudioVideoController
     this.connectionHealthData.setConnectionStartTime();
   }
 
+  private createOrReuseSignalingTask(): Task {
+    if (!this.signalingTask) {
+      this.initSignalingClient();
+      this.signalingTask = new TimeoutTask(
+        this.logger,
+        new OpenSignalingConnectionTask(this.meetingSessionContext),
+        this.configuration.connectionTimeoutMs
+      ).once();
+    }
+
+    return this.signalingTask;
+  }
+
   private actionFinishConnecting(): void {
+    this.signalingTask = undefined;
     this.meetingSessionContext.videoDuplexMode = SdkStreamServiceType.RX;
     if (!this.meetingSessionContext.enableSimulcast) {
       this.enforceBandwidthLimitationForSender(

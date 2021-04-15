@@ -8,7 +8,7 @@ import VideoSource from '../videosource/VideoSource';
 export default interface AudioVideoControllerFacade {
   addObserver(observer: AudioVideoObserver): void;
   removeObserver(observer: AudioVideoObserver): void;
-  start(): void;
+  start(options?: { signalingOnly?: boolean }): void;
   stop(): void;
   getRTCPeerConnectionStats(selector?: MediaStreamTrack): Promise<RTCStatsReport>;
   /**

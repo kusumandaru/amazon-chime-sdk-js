@@ -161,6 +161,7 @@ import NoVideoUplinkBandwidthPolicy from './videouplinkbandwidthpolicy/NoVideoUp
 import None from './maybe/None';
 import NotFoundError from './devicecontroller/NotFoundError';
 import NotReadableError from './devicecontroller/NotReadableError';
+import OnceTask from './task/OnceTask';
 import OpenSignalingConnectionTask from './task/OpenSignalingConnectionTask';
 import OverconstrainedError from './devicecontroller/OverconstrainedError';
 import ParallelGroupTask from './task/ParallelGroupTask';
@@ -424,6 +425,7 @@ export {
   None,
   NotFoundError,
   NotReadableError,
+  OnceTask,
   OpenSignalingConnectionTask,
   OverconstrainedError,
   ParallelGroupTask,

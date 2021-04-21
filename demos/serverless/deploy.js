@@ -164,6 +164,7 @@ if (!fs.existsSync('build')) {
 console.log(`Using region ${region}, bucket ${bucket}, stack ${stack}, endpoint ${chimeEndpoint}, enable-termination-protection ${enableTerminationProtection}, disable-printing-logs ${disablePrintingLogs}`);
 ensureBucket();
 
+/*
 for (const package of packages) {
   // Work around https://github.com/awslabs/aws-embedded-metrics-node/issues/84.
   // When that issue is fixed, you can remove --legacy-peer-deps.
@@ -173,6 +174,7 @@ for (const package of packages) {
   fs.removeSync(path.join(__dirname, 'src', package));
   fs.copySync(path.join(__dirname, 'node_modules', package), path.join(__dirname, 'src', package));
 }
+*/
 
 fs.copySync(appHtml(app), 'src/index.html');
 

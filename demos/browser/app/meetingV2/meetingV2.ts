@@ -397,6 +397,14 @@ export class DemoMeetingApp
     } else {
       (document.getElementById('inputMeeting') as HTMLInputElement).focus();
     }
+
+    const keybase = new URL(window.location.href).searchParams.get('k');
+    var encodedMeeting = btoa(meeting);
+    if (encodedMeeting == keybase) {
+      (document.getElementById('authenticate') as HTMLInputElement).disabled = false;
+    } else {
+      (document.getElementById('authenticate') as HTMLInputElement).disabled = true;
+    }
   }
 
   async initVoiceFocus(): Promise<void> {
